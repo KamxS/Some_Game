@@ -45,6 +45,7 @@ C_Transform new_transform(Vector2 position, Vector2 size, float speed) {
     do {\
         entity_component = vec_size(components); \
         vec_push(components, component);\
+        components[entity_component].entity = entity_id;\
     }while(0)
 
 int main(void)
