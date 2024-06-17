@@ -104,12 +104,8 @@ int main(void)
         }
 
         // Velocity 
-        for(Entity* entity=vec_begin(entities);entity<vec_end(entities);entity++) {
-            if(entity->tag!="Enemy" && entity->tag!="Player") continue;
-            c_transforms[entity->c_transform].position = Vector2Add(
-                c_transforms[entity->c_transform].position,
-                Vector2Scale(c_transforms[entity->c_transform].velocity, GetFrameTime())
-            );
+        for(C_Transform* transform=vec_begin(c_transforms); transform<vec_end(c_transforms); transform++) {
+            transform->position = Vector2Add(transform->position, Vector2Scale(transform->velocity, GetFrameTime()));
         }
 
         BeginDrawing();
