@@ -5,6 +5,7 @@
 #include <time.h>
 
 typedef struct C_Transform {
+    size_t entity;
     Vector2 position; 
     Vector2 size; 
     float speed;
@@ -12,10 +13,12 @@ typedef struct C_Transform {
 } C_Transform;
 
 typedef struct C_Renderer {
+    size_t entity;
     Color color;
 } C_Renderer;
 
 typedef struct Entity {
+    long id;
     char* tag;
     size_t c_transform;
     size_t c_renderer;
@@ -23,23 +26,26 @@ typedef struct Entity {
 
 Entity new_entity(char* tag) {
     return (Entity) {
+        .id = 0,
         .tag = tag, 
         .c_transform = -1,
         .c_renderer = -1
     };
 }
 
-C_Renderer* new_renderer(C_Renderer* render_vec, Color color) {
-    C_Renderer rend = {color};
-    vec_push(render_vec, rend);
-    return render_vec;
+C_Renderer new_renderer(Color color) {
+    return (C_Renderer){-1,color};
 }
 
-C_Transform* new_transform(C_Transform* transform_vec, Vector2 position, Vector2 size, float speed) {
-    C_Transform transform = {position, size, speed, (Vector2){0,0}};
-    vec_push(transform_vec, transform);
-    return transform_vec;
+C_Transform new_transform(Vector2 position, Vector2 size, float speed) {
+    return (C_Transform){-1, position, size, speed, (Vector2){0,0}};
 }
+
+#define add_component(entity_id, entity_component, components, component) \
+    do {\
+        entity_component = vec_size(components); \
+        vec_push(components, component);\
+    }while(0)
 
 int main(void)
 {
@@ -57,14 +63,11 @@ int main(void)
     vec_init(entities, 32);
 
     Entity player = new_entity("Player");
-    size_t player_renderer = vec_size(c_renderers);
-    c_renderers = new_renderer(c_renderers, WHITE);
-    size_t player_transform = vec_size(c_transforms);
-    c_transforms = new_transform(c_transforms, (Vector2){20, 20}, (Vector2){10,10}, 300.f);
-    player.c_renderer = player_renderer;
-    player.c_transform = player_transform;
+    size_t player_ind = vec_size(entities);
+    add_component(player_ind, player.c_renderer, c_renderers, new_renderer(WHITE));
+    add_component(player_ind, player.c_transform, c_transforms, new_transform((Vector2){20, 20}, (Vector2){10,10}, 300.f));
     vec_push(entities, player);
-    size_t player_id = vec_size(entities);
+    size_t player_transform = player.c_transform;
     Vector2 player_dir = {0};
 
     SetTargetFPS(60);
@@ -86,10 +89,10 @@ int main(void)
 
         if(IsKeyPressed(KEY_N)) {
             Entity n_entity = new_entity("Enemy");
-            n_entity.c_renderer = vec_size(c_renderers);
-            n_entity.c_transform = vec_size(c_transforms);
-            c_renderers = new_renderer(c_renderers, (Color){rand()%255, rand()%255, rand()%255, 255});
-            c_transforms = new_transform(c_transforms, (Vector2){rand()%(screenWidth), rand()%screenHeight}, (Vector2){10,10}, 200);
+            C_Renderer e_renderer = new_renderer((Color){rand()%255, rand()%255, rand()%255, 255});
+            C_Transform e_transform = new_transform((Vector2){rand()%(screenWidth), rand()%screenHeight}, (Vector2){10,10}, 200);
+            add_component(vec_size(entities), n_entity.c_transform, c_transforms, e_transform);
+            add_component(vec_size(entities), n_entity.c_renderer, c_renderers, e_renderer);
             vec_push(entities, n_entity); 
         }
 
