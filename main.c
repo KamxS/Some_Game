@@ -68,10 +68,14 @@ Entity new_entity(char* tag) {
         vec_push(components, component);\
         components[entity_component].entity = entity_id;\
     }while(0)
+#define __register_component(component) \
+    component* component##s= NULL;\
+    vec_init(component##s, 32);\
 
-#define __add_component(ecs, entity, component_type, component_init) \
+#define __add_component(entity_id, component_type, component_init) \
+    vec_size(component##s);
     do {\
-\
+        vec_push(components##s,component_init);\
     }while(0) 
 
 int main(void)
@@ -90,6 +94,8 @@ int main(void)
     vec_init(c_colliders, 32);
     Entity* entities = NULL;
     vec_init(entities, 32);
+
+    __register_component(int);
 
     // Player Setup
     Entity player = new_entity("Player");
@@ -184,6 +190,7 @@ int main(void)
 
     vec_free(c_renderers);
     vec_free(c_transforms);
+    vec_free(c_colliders);
     vec_free(entities);
 
     CloseWindow();
