@@ -4,8 +4,30 @@
 #include "hashmap.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
+
+struct name_component_pair{
+    char *name;
+    void *component_vec;
+};
+
+struct name_component_id_pair{
+    char *name;
+    size_t component_id;
+};
+
+int component_name_cmp(const void *a, const void *b, void *udata) {
+    const struct name_component_pair *ca = a;
+    const struct name_component_pair *cb = b;
+    return strcmp(ca->name, cb->name);
+}
+
+uint64_t component_name_hash(const void *item, uint64_t seed0, uint64_t seed1) {
+    const struct name_component_pair *component = item;
+    return hashmap_sip(component->name, strlen(component->name), seed0, seed1);
+}
 typedef struct C_Transform {
     size_t entity;
     Vector2 position; 
@@ -30,9 +52,7 @@ typedef struct C_Renderer {
 typedef struct Entity {
     uint32_t id;
     char* tag;
-    size_t c_transform;
-    size_t c_renderer;
-    size_t c_collider;
+    struct hashmap *components;
 } Entity;
 
 #define MAX_COMPONENTS 32
@@ -40,6 +60,7 @@ typedef struct ECS {
     Entity* entities;
     struct hashmap *components;
     int __n_of_components;
+    int __n_of_entities;
 } ECS;
 
 C_Renderer new_renderer(Color color) {
@@ -55,73 +76,71 @@ C_Collider new_collider(float x, float y, float width, float height, long collid
 }
 
 size_t new_entity(ECS *ecs, char *tag) {
-    Entity n_entity = {.id = 0,.tag = tag, .c_transform = -1,.c_renderer = -1,.c_collider = -1};
+    //Entity n_entity = {.id = 0,.tag = tag, .c_transform = -1,.c_renderer = -1,.c_collider = -1};
+    Entity n_entity = {.id=vec_size(ecs->entities),.tag=tag};
+    n_entity.components = hashmap_new(sizeof(struct name_component_id_pair), 0, 0, 0,component_name_hash, component_name_cmp, NULL, NULL);
     vec_push(ecs->entities,n_entity);
+    ecs->__n_of_entities++;
     return vec_size(ecs->entities)-1;
-}
-
-struct component_kv{
-    char *name;
-    void *component_vec;
-};
-
-int user_compare(const void *a, const void *b, void *udata) {
-    const struct component_kv *ca = a;
-    const struct component_kv *cb = b;
-    return strcmp(ca->name, cb->name);
-}
-
-uint64_t user_hash(const void *item, uint64_t seed0, uint64_t seed1) {
-    const struct component_kv *component = item;
-    return hashmap_sip(component->name, strlen(component->name), seed0, seed1);
 }
 
 ECS *init_ecs() {
     ECS *ecs = malloc(sizeof(ECS));
     vec_init(ecs->entities, 32);
-    ecs->components = hashmap_new(sizeof(struct component_kv), 0, 0, 0,user_hash, user_compare, NULL, NULL);
+    ecs->components = hashmap_new(sizeof(struct name_component_pair), 0, 0, 0,component_name_hash, component_name_cmp, NULL, NULL);
     ecs->__n_of_components = 0;
     return ecs;
 }
 
 void free_ecs(ECS *ecs) {
+    for(Entity* entity=vec_begin(ecs->entities);entity<vec_end(ecs->entities);entity++) {
+        hashmap_free(entity->components);
+    }
     vec_free(ecs->entities);
     hashmap_free(ecs->components);
     free(ecs);
 }
 
-
-#define add_component(entity_id, entity_component, components, component) \
-    do {\
-        entity_component = vec_size(components);\
-        vec_push(components, component);\
-        components[entity_component].entity = entity_id;\
-    }while(0)
-
-
-#define __register_component(ecs,  component)\
+#define ecs_register_component(ecs,  component)\
     do { \
         component *vec = NULL;\
         vec_init(vec, 16);\
-        hashmap_set(ecs->components, &(struct component_kv){ #component, vec });\
+        hashmap_set(ecs->components, &(struct name_component_pair){ #component, vec });\
         ecs->__n_of_components++;\
     }while(0)
 
-#define __add_component(ecs, entity_component, component, component_init)\
+#define ecs_add_component(ecs, entity_id, component, component_init)\
     do { \
-        component *vec= ((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){ .name=#component }))->component_vec;\
-        entity_component = vec_size(vec);\
+        component *vec= ((struct name_component_pair*)hashmap_get(ecs->components, &(struct name_component_pair){ .name=#component }))->component_vec;\
+        hashmap_set(ecs->entities[entity_id].components, &(struct name_component_id_pair){ #component, vec_size(vec) });\
         bool update = false;\
         if(vec_size(vec) >= vec_capacity(vec)) update=true; \
-        vec_push(vec, component_init);\
-        if(update) hashmap_set(ecs->components, &(struct component_kv){ #component, vec });\
+        component initialized = component_init;\
+        initialized.entity = entity_id;\
+        vec_push(vec, initialized);\
+        if(update) hashmap_set(ecs->components, &(struct name_component_pair){ #component, vec });\
     }while(0)
 
-#define __get_component(ecs, entity_id, component)\
-    &((component*)((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){.name=#component}))->component_vec)[entity_id]
+#define ecs_check_tag(ecs, entity_id, str) \
+    !strcmp(ecs->entities[entity_ind].tag, str)
+
+#define __get_component_id(ecs, entity_id, component) \
+    ((struct name_component_id_pair*)hashmap_get(ecs->entities[entity_id].components, &(struct name_component_id_pair){.name=#component}))->component_id
 
 #define __get_components(ecs, component)\
-    (component*)((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){.name=#component}))->component_vec
+    (component*)(((struct name_component_pair*)hashmap_get(ecs->components, &(struct name_component_pair){.name=#component}))->component_vec)
+
+#define ecs_get_component(ecs, entity_id, component)\
+    (component*)&(((component*)__get_components(ecs, component))[__get_component_id(ecs, entity_id, component)])
+
+/* 
+ TODOS:
+    - Tag System
+    - Entity Deletion + Recycling
+    - Cleanup
+    - Collison
+    - Gameplay?
+*/
 
 int main(void)
 {
@@ -132,24 +151,21 @@ int main(void)
     InitWindow(screenWidth, screenHeight, "Game");
 
     ECS *ecs = init_ecs();
-    __register_component(ecs, C_Transform);
-    __register_component(ecs, C_Renderer);
-    __register_component(ecs, C_Collider);
+    ecs_register_component(ecs, C_Transform);
+    ecs_register_component(ecs, C_Renderer);
+    ecs_register_component(ecs, C_Collider);
 
     size_t player_ind = new_entity(ecs, "Player");
-    __add_component(ecs, ecs->entities[player_ind].c_transform, C_Transform, new_transform((Vector2){20,20}, (Vector2){60,60}, 300.f));
-    __add_component(ecs, ecs->entities[player_ind].c_renderer, C_Renderer, new_renderer(WHITE));
-    __add_component(ecs, ecs->entities[player_ind].c_collider, C_Collider, new_collider(0, 0, 60, 60, 0, 0));
+    ecs_add_component(ecs, player_ind, C_Transform, new_transform((Vector2){20,20}, (Vector2){60,60}, 300.f));
+    ecs_add_component(ecs, player_ind, C_Renderer, new_renderer(RED));
+    ecs_add_component(ecs, player_ind, C_Collider, new_collider(0, 0, 60, 60, 0, 0));
     Vector2 player_dir = {0};
 
-    /*
-    size_t entity_id = vec_size(entities);
-    vec_push(entities,new_entity("Enemy"));
-    add_component(entity_id, entities[entity_id].c_renderer, c_renderers, new_renderer(WHITE));
+    size_t box_ind = new_entity(ecs, "Box");
+    ecs_add_component(ecs, box_ind, C_Renderer, new_renderer(WHITE));
     C_Transform entity_transform = new_transform((Vector2){280, 80}, (Vector2){30,50}, 300.f);
-    add_component(entity_id, entities[entity_id].c_transform, c_transforms, entity_transform);
-    add_component(entity_id, entities[entity_id].c_collider, c_colliders, new_collider(0,0,30,50, 0, 0));
-    */
+    ecs_add_component(ecs,box_ind, C_Transform, entity_transform);
+    ecs_add_component(ecs, box_ind, C_Collider, new_collider(0,0,30,50, 0, 0));
 
     SetTargetFPS(60);
     while (!WindowShouldClose()) {
@@ -166,21 +182,21 @@ int main(void)
         if(IsKeyDown(KEY_D)) {
             player_dir.x = 1;
         }
-        C_Transform *transform = __get_component(ecs, player_ind, C_Transform);
+        C_Transform *transform = ecs_get_component(ecs, player_ind, C_Transform);
         transform->velocity = Vector2Scale(Vector2Normalize(player_dir), transform->speed);
 
         if(IsKeyPressed(KEY_N)) {
             size_t entity_ind = new_entity(ecs, "Enemy");
             C_Renderer e_renderer = new_renderer((Color){rand()%255, rand()%255, rand()%255, 255});
-            __add_component(ecs, ecs->entities[entity_ind].c_renderer, C_Renderer, e_renderer);
+            ecs_add_component(ecs, entity_ind, C_Renderer, e_renderer);
             C_Transform e_transform = new_transform((Vector2){rand()%(screenWidth), rand()%screenHeight}, (Vector2){10,10}, 200);
-            __add_component(ecs, ecs->entities[entity_ind].c_transform, C_Transform, e_transform);
+            ecs_add_component(ecs, entity_ind, C_Transform, e_transform);
         }
 
         // Enemy "AI"
         for(size_t entity_ind=0;entity_ind<vec_size(ecs->entities);entity_ind++) {
-            if(ecs->entities[entity_ind].tag!="Enemy") continue;
-            C_Transform *entity_transform = __get_component(ecs, entity_ind, C_Transform);
+            if(!ecs_check_tag(ecs, entity_ind, "Enemy")) continue;
+            C_Transform *entity_transform = ecs_get_component(ecs, entity_ind, C_Transform);
             Vector2 dir = Vector2Normalize(Vector2Subtract(transform->position, entity_transform->position));
             entity_transform->velocity = Vector2Scale(dir, entity_transform->speed);
         }
@@ -192,43 +208,40 @@ int main(void)
         }
 
         // Collisions
-        /*
         C_Collider *c_colliders = __get_components(ecs, C_Collider);
         for(C_Collider* collider=vec_begin(c_colliders); collider<vec_end(c_colliders); collider++) {
             for(C_Collider* collision=collider+1; collision<vec_end(c_colliders); collision++) {
                 // Category Check
                 // Bounding Box Check
-                C_Transform collider_transform = c_transforms[entities[collider->entity].c_transform];
-                C_Transform collision_transform = c_transforms[entities[collision->entity].c_transform];
-                Rectangle collider_rect  = {collider_transform.position.x, collider_transform.position.y, collider_transform.size.x, collider_transform.size.y};
-                Rectangle collision_rect = {collision_transform.position.x, collision_transform.position.y, collision_transform.size.x, collision_transform.size.y};
+                C_Transform *collider_transform = ecs_get_component(ecs, collider->entity, C_Transform);
+                C_Transform *collision_transform = ecs_get_component(ecs, collision->entity, C_Transform);
+                Rectangle collider_rect  = {collider_transform->position.x, collider_transform->position.y, collider_transform->size.x, collider_transform->size.y};
+                Rectangle collision_rect = {collision_transform->position.x, collision_transform->position.y, collision_transform->size.x, collision_transform->size.y};
                 bool is_colliding = CheckCollisionRecs(collider_rect, collision_rect);
                 collider->is_colliding = is_colliding;
                 collision->is_colliding = is_colliding;
             }
         }
-        */
 
         BeginDrawing();
             ClearBackground(BLACK);
             for(size_t entity_ind=0;entity_ind<vec_size(ecs->entities);entity_ind++) {
-                //if(entity->tag!="Enemy" && entity->tag!="Player") continue;
-                C_Transform* transform = __get_component(ecs, entity_ind, C_Transform);
-                C_Renderer* renderer = __get_component(ecs, entity_ind, C_Renderer);
-                DrawRectangleV(transform->position, transform->size, renderer->color);
-                /*
-                Color c = WHITE;
-                if(c_colliders[entity->c_collider].is_colliding) {
-                    c = RED;
+                C_Transform* transform = ecs_get_component(ecs, entity_ind, C_Transform);
+                C_Renderer* renderer = ecs_get_component(ecs, entity_ind, C_Renderer);
+                if(ecs_check_tag(ecs, entity_ind, "Player") || ecs_check_tag(ecs, entity_ind, "Box")) {
+                    C_Collider* collider = ecs_get_component(ecs, entity_ind, C_Collider);
+                    Color c = WHITE;
+                    if(collider->is_colliding) {
+                        c = RED;
+                    }
+                    DrawRectangleLines(transform->position.x, transform->position.y, transform->size.x, transform->size.y, c);
+                }else {
+                    DrawRectangleV(transform->position, transform->size, renderer->color);
                 }
-                DrawRectangleLines(transform.position.x, transform.position.y, transform.size.x, transform.size.y, c);
-                */
             }
         EndDrawing();
     }
-
     free_ecs(ecs);
-
     CloseWindow();
     return 0;
 }
