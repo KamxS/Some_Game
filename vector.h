@@ -15,7 +15,7 @@ typedef struct _vec_metadata {
 
 #define vec_init(vec, initial_count)                                        \
     if(!vec) {                                                              \
-        (vec) = malloc(sizeof(_vec_metadata)+sizeof(*vec)*initial_count);   \
+        (vec) = calloc(1, sizeof(_vec_metadata)+sizeof(*vec)*initial_count);\
         ((_vec_metadata*)(vec))->size = 0;                                  \
         ((_vec_metadata*)(vec))->capacity = initial_count;                  \
         (vec) = vec_get_data_ptr(vec);                                      \
