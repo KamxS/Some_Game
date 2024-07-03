@@ -2,6 +2,8 @@
 #include "raymath.h"
 #include "vector.h"
 #include "hashmap.h"
+#include "sds.h"
+#include "sdsalloc.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
@@ -38,6 +40,7 @@ typedef struct C_Renderer {
 typedef struct ECS {
     struct hashmap *components;
     uint32_t *signatures;
+    sds *tags;
     int number_of_components;
     int number_of_entities;
 } ECS;
@@ -54,7 +57,11 @@ C_Collider new_collider(float x, float y, float width, float height, long collid
     return (C_Collider){(Rectangle){x,y,width,height},collides_with, collision_category, false};
 }
 
-size_t new_entity(ECS *ecs, char *tag) {
+size_t new_entity(ECS *ecs) {
+    return ecs->number_of_entities++;
+}
+size_t new_entity_with_tag(ECS *ecs, char *tag) {
+    ecs->tags[ecs->number_of_entities] = sdsnew(tag);
     return ecs->number_of_entities++;
 }
 
@@ -80,6 +87,7 @@ ECS *init_ecs() {
     ecs->number_of_components = 0;
     ecs->number_of_entities = 0;
     vec_init(ecs->signatures, MAX_ENTITIES);
+    vec_init(ecs->tags, MAX_ENTITIES);
     return ecs;
 }
 
@@ -94,6 +102,10 @@ void free_ecs(ECS *ecs) {
     }
     hashmap_free(ecs->components);
     vec_free(ecs->signatures);
+    for(size_t tag_ind=0;tag_ind<ecs->number_of_entities; tag_ind++) {
+        sdsfree(ecs->tags[tag_ind]);
+    }
+    vec_free(ecs->tags);
     free(ecs);
 }
 
@@ -110,7 +122,7 @@ void free_ecs(ECS *ecs) {
         ecs->number_of_components++;\
     }while(0)
 
-// TODO: Not the biggest fun of this
+// TODO: Not the biggest fan of this
 #define ecs_add_component(ecs, entity_id, component, component_init) \
     do {\
         ComponentVec *cvec = __ecs_get_component_vec(ecs, component);\
@@ -134,13 +146,13 @@ void free_ecs(ECS *ecs) {
 
 #define ecs_get_component_signature(ecs, component) __ecs_get_component_vec(ecs,component)->signature
 #define ecs_get_signature(ecs, entity_id) ecs->signatures[entity_id]
+#define ecs_get_tag(ecs, entity_id) ecs->tags[entity_id]
 
 #define ecs_iter_components(ecs, component)\
     (component*)((ComponentVec)((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){.name=#component}))->component_vec).data
 
 /* TODO LIST */
 /*
-    - Tags
     - Enemy Kill
     - Id Recycling
     - Collisions
@@ -159,7 +171,7 @@ int main(void) {
     ecs_register_component(ecs, C_Renderer);
     ecs_register_component(ecs, C_Collider);
 
-    size_t player_ind = new_entity(ecs, "Player");
+    size_t player_ind = new_entity_with_tag(ecs, "Player");
     ecs_add_component(ecs, player_ind, C_Transform, new_transform((Vector2){20,20}, (Vector2){60,60}, 300.f));
     ecs_add_component(ecs, player_ind, C_Renderer, {WHITE});
     ecs_add_component(ecs, player_ind, C_Collider, new_collider(0, 0, 60, 60, 0, 0));
@@ -193,19 +205,16 @@ int main(void) {
         transform->velocity = Vector2Scale(Vector2Normalize(player_dir), transform->speed);
 
         if(IsKeyPressed(KEY_N)) {
-            size_t entity_ind = new_entity(ecs, "Enemy");
+            size_t entity_ind = new_entity_with_tag(ecs, "Enemy");
             C_Renderer e_renderer = new_renderer((Color){rand()%255, rand()%255, rand()%255, 255});
             ecs_add_component(ecs, entity_ind, C_Renderer, e_renderer);
             C_Transform e_transform = new_transform((Vector2){rand()%(screenWidth), rand()%screenHeight}, (Vector2){10,10}, 200);
             ecs_add_component(ecs, entity_ind, C_Transform, e_transform);
-
-            // TODO: Can you just implement names already...
-            ecs->signatures[entity_ind] |= 8;
         }
 
         // Enemy "AI"
         for(uint32_t entity_ind=0;entity_ind<ecs->number_of_entities;entity_ind++) {
-            if((ecs_get_signature(ecs, entity_ind) & 8) == 0) continue;
+            if(strcmp(ecs_get_tag(ecs, entity_ind), "Enemy") != 0) continue;
             C_Transform *entity_transform = ecs_get_component(ecs, entity_ind, C_Transform);
             Vector2 dir = Vector2Normalize(Vector2Subtract(transform->position, entity_transform->position));
             entity_transform->velocity = Vector2Scale(dir, entity_transform->speed);
