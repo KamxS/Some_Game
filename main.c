@@ -6,6 +6,7 @@
 #include "sdsalloc.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #define MAX_COMPONENTS 32
@@ -14,6 +15,7 @@
 typedef uint32_t entity_t;
 typedef struct ComponentVec {
     void *data;
+    size_t size_of_component;
     size_t *entity_to_ind;    
     size_t *ind_to_entity;
     uint32_t signature;
@@ -115,6 +117,7 @@ void free_ecs(ECS *ecs) {
         component *vec = NULL;\
         vec_init(vec, 16);\
         cvec.data = vec;\
+        cvec.size_of_component = sizeof(component);\
         vec_init(cvec.entity_to_ind, MAX_ENTITIES);\
         vec_init(cvec.ind_to_entity, MAX_ENTITIES);\
         cvec.signature = 1<<ecs->number_of_components;\
@@ -150,6 +153,29 @@ void free_ecs(ECS *ecs) {
 
 #define ecs_iter_components(ecs, component)\
     (component*)((ComponentVec)((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){.name=#component}))->component_vec).data
+
+void kill_entity(ECS *ecs, uint32_t entity_id) {
+    size_t iter = 0;
+    void *item;
+    while (hashmap_iter(ecs->components, &iter, &item)) {
+        const struct component_kv *component_kv= item;
+        if(ecs_get_signature(ecs, entity_id) & component_kv->component_vec.signature) {
+            ComponentVec cvec = component_kv->component_vec;
+            size_t component_to_remove_ind = cvec.entity_to_ind[entity_id];
+            memcpy((cvec.data+(cvec.size_of_component)*component_to_remove_ind),
+                    cvec.data+(cvec.size_of_component)*(vec_size(cvec.data)-1),
+                    cvec.size_of_component
+            );
+            size_t last_entity = cvec.ind_to_entity[vec_size(cvec.data)-1];
+            cvec.entity_to_ind[last_entity] = cvec.entity_to_ind[entity_id];
+            cvec.ind_to_entity[component_to_remove_ind] = last_entity;
+            vec_pop(cvec.data);
+        }
+    }
+    ecs->signatures[entity_id] = 0;
+    sdsclear(ecs->tags[entity_id]);
+    ecs->number_of_entities--;
+}
 
 /* TODO LIST */
 /*
@@ -264,8 +290,8 @@ drawing:
                 selected_entity = __ecs_get_component_vec(ecs, C_Transform)->ind_to_entity[transform_ind];
             }
         }
-        if(IsMouseButtonDown(0) && selected_entity!=-1) {
-            // KILL
+        if(IsMouseButtonPressed(0) && selected_entity!=-1) {
+            kill_entity(ecs, selected_entity);
         }
 
         BeginDrawing();

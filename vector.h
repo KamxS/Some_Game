@@ -66,23 +66,4 @@ do{                                                                             
             }                                                                                   \
         }                                                                                       \
     }while(0)
-
-#define vec_filter(vec, func)                               \
-    do {                                                    \
-        size_t ind_to_erase = 0;\
-        size_t len = 0;\
-        for(size_t ind=0;ind < vec_size(vec); ind++) {      \
-            if(func(&vec[ind])) { \
-                if(len>0) { \
-                    vec_erase(vec, ind_to_erase, len);\
-                    len = 0;\
-                }\
-            }else {\
-                if(len==0) {\
-                    ind_to_erase = ind;\
-                }\
-                len+=1; \
-            }\
-        }                                                   \
-    }while(0)
 #endif
