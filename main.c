@@ -11,13 +11,13 @@
 #define MAX_COMPONENTS 32
 #define MAX_ENTITIES 5000
 
+typedef uint32_t entity_t;
 typedef struct ComponentVec {
     void *data;
     size_t *entity_to_ind;    
     size_t *ind_to_entity;
     uint32_t signature;
 } ComponentVec;
-typedef uint32_t entity_t;
 
 typedef struct C_Transform {
     Vector2 position; 
@@ -65,7 +65,7 @@ size_t new_entity_with_tag(ECS *ecs, char *tag) {
     return ecs->number_of_entities++;
 }
 
-struct component_kv{
+struct component_kv {
     char *name;
     ComponentVec component_vec;
 };
@@ -162,9 +162,12 @@ void free_ecs(ECS *ecs) {
 int main(void) {
     const int screenWidth = 800;
     const int screenHeight = 450;
+    bool paused = false;
 
     srand(time(0));
     InitWindow(screenWidth, screenHeight, "Game");
+    Camera2D camera = {(Vector2){0,0}, (Vector2){0,0}, 0.f, 1.f};
+    char id_display_buf[64] = "";
 
     ECS *ecs = init_ecs();
     ecs_register_component(ecs, C_Transform);
@@ -188,6 +191,9 @@ int main(void) {
 
     SetTargetFPS(60);
     while (!WindowShouldClose()) {
+        // TODO: First (and hopefully last) time using goto's 
+        if(paused) goto drawing;
+
         player_dir = (Vector2){0};
         if(IsKeyDown(KEY_W)) {
             player_dir.y = -1;
@@ -243,8 +249,28 @@ int main(void) {
         }
         */
 
+// TODO: Remove This!!
+drawing:
+        if(IsKeyPressed(KEY_P)) {
+            paused = !paused;
+        }
+
+        // ID Display + Entity by Click Kill
+        Vector2 mousePos = GetScreenToWorld2D(GetMousePosition(), camera);
+        size_t selected_entity = -1;
+        for(size_t transform_ind =0; transform_ind<vec_size(c_transforms); transform_ind++) {
+            C_Transform transform = c_transforms[transform_ind];
+            if(CheckCollisionPointRec(mousePos, (Rectangle){transform.position.x, transform.position.y, transform.size.x, transform.size.y})) {
+                selected_entity = __ecs_get_component_vec(ecs, C_Transform)->ind_to_entity[transform_ind];
+            }
+        }
+        if(IsMouseButtonDown(0) && selected_entity!=-1) {
+            // KILL
+        }
+
         BeginDrawing();
             ClearBackground(BLACK);
+            BeginMode2D(camera);
             C_Renderer *renderers = ecs_iter_components(ecs, C_Renderer);
             for(size_t rind=0;rind< vec_size(renderers); rind++) {
                 size_t entity_id = __ecs_get_component_vec(ecs, C_Renderer)->ind_to_entity[rind];
@@ -264,6 +290,10 @@ int main(void) {
                 DrawRectangleLines(transform.position.x, transform.position.y, transform.size.x, transform.size.y, c);
             }
             */
+            EndMode2D();
+            // ID Display
+            if(selected_entity!=-1) sprintf(id_display_buf, "ID: %d, GEN: %d", selected_entity & 0x0FFF, (uint8_t)(selected_entity << 24));
+            DrawText(id_display_buf, screenWidth-140, 20, 16, WHITE);
         EndDrawing();
     }
     free_ecs(ecs);
