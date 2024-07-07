@@ -42,6 +42,7 @@ typedef struct C_Renderer {
 typedef struct ECS {
     struct hashmap *components;
     uint32_t *signatures;
+    entity_t *free_ids;
     sds *tags;
     int number_of_components;
     int number_of_entities;
@@ -59,12 +60,19 @@ C_Collider new_collider(float x, float y, float width, float height, long collid
     return (C_Collider){(Rectangle){x,y,width,height},collides_with, collision_category, false};
 }
 
-size_t new_entity(ECS *ecs) {
-    return ecs->number_of_entities++;
+entity_t new_entity(ECS *ecs) {
+    entity_t new_id = ecs->number_of_entities++;
+    if(vec_size(ecs->free_ids) > 0) {
+        //new_id = (1<<24) | ecs->free_ids[vec_size(ecs->free_ids)-1];
+        new_id =ecs->free_ids[vec_size(ecs->free_ids)-1];
+        vec_pop(ecs->free_ids);
+    }
+    return new_id;
 }
-size_t new_entity_with_tag(ECS *ecs, char *tag) {
-    ecs->tags[ecs->number_of_entities] = sdsnew(tag);
-    return ecs->number_of_entities++;
+entity_t new_entity_with_tag(ECS *ecs, char *tag) {
+    entity_t id = new_entity(ecs);
+    ecs->tags[id] = sdsnew(tag);
+    return id;
 }
 
 struct component_kv {
@@ -90,6 +98,7 @@ ECS *init_ecs() {
     ecs->number_of_entities = 0;
     vec_init(ecs->signatures, MAX_ENTITIES);
     vec_init(ecs->tags, MAX_ENTITIES);
+    vec_init(ecs->free_ids, 64);
     return ecs;
 }
 
@@ -108,6 +117,7 @@ void free_ecs(ECS *ecs) {
         sdsfree(ecs->tags[tag_ind]);
     }
     vec_free(ecs->tags);
+    vec_free(ecs->free_ids);
     free(ecs);
 }
 
@@ -125,62 +135,67 @@ void free_ecs(ECS *ecs) {
         ecs->number_of_components++;\
     }while(0)
 
+#define __ecs_get_id(entity_id) (entity_id & 0x0FFF)
+//#define __ecs_get_generation(entity_id) ((entity_id & 0xF000)>>24)
+
 // TODO: Not the biggest fan of this
 #define ecs_add_component(ecs, entity_id, component, component_init) \
     do {\
         ComponentVec *cvec = __ecs_get_component_vec(ecs, component);\
         size_t ind = vec_size(cvec->data);\
-        cvec->entity_to_ind[entity_id] = ind;\
-        cvec->ind_to_entity[ind]=entity_id;\
+        cvec->entity_to_ind[__ecs_get_id(entity_id)] = ind;\
+        cvec->ind_to_entity[ind]=__ecs_get_id(entity_id);\
         component *vec = cvec->data;\
         bool update = false;\
         if(vec_size(vec) >= vec_capacity(vec)) update=true;\
         component n_component = component_init;\
         vec_push(vec, n_component);\
         if(update) {cvec->data=vec;hashmap_set(ecs->components, &(struct component_kv){ #component, *cvec });}\
-        ecs->signatures[entity_id] |= cvec->signature;\
+        ecs->signatures[__ecs_get_id(entity_id)] |= cvec->signature;\
     }while(0)
 
 #define ecs_get_component(ecs, entity_id, component)\
-    &(((component*)__ecs_get_component_vec(ecs, component)->data)[__ecs_get_component_vec(ecs, component)->entity_to_ind[entity_id]]);
+    &(((component*)__ecs_get_component_vec(ecs, component)->data)[__ecs_get_component_vec(ecs, component)->entity_to_ind[__ecs_get_id(entity_id)]]);
 
 #define __ecs_get_component_vec(ecs, component) \
     ((ComponentVec*)&(((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){.name=#component}))->component_vec))
 
 #define ecs_get_component_signature(ecs, component) __ecs_get_component_vec(ecs,component)->signature
-#define ecs_get_signature(ecs, entity_id) ecs->signatures[entity_id]
-#define ecs_get_tag(ecs, entity_id) ecs->tags[entity_id]
+#define ecs_get_signature(ecs, entity_id) ecs->signatures[__ecs_get_id(entity_id)]
+#define ecs_get_tag(ecs, entity_id) ecs->tags[__ecs_get_id(entity_id)]
 
 #define ecs_iter_components(ecs, component)\
     (component*)((ComponentVec)((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){.name=#component}))->component_vec).data
 
-void kill_entity(ECS *ecs, uint32_t entity_id) {
+void kill_entity(ECS *ecs, entity_t entity_id) {
     size_t iter = 0;
     void *item;
     while (hashmap_iter(ecs->components, &iter, &item)) {
         const struct component_kv *component_kv= item;
         if(ecs_get_signature(ecs, entity_id) & component_kv->component_vec.signature) {
             ComponentVec cvec = component_kv->component_vec;
-            size_t component_to_remove_ind = cvec.entity_to_ind[entity_id];
-            memcpy((cvec.data+(cvec.size_of_component)*component_to_remove_ind),
-                    cvec.data+(cvec.size_of_component)*(vec_size(cvec.data)-1),
+            size_t component_to_replace = cvec.entity_to_ind[__ecs_get_id(entity_id)];
+            memcpy(cvec.data+cvec.size_of_component*component_to_replace,
+                    cvec.data+cvec.size_of_component*(vec_size(cvec.data)-1),
                     cvec.size_of_component
             );
-            size_t last_entity = cvec.ind_to_entity[vec_size(cvec.data)-1];
-            cvec.entity_to_ind[last_entity] = cvec.entity_to_ind[entity_id];
-            cvec.ind_to_entity[component_to_remove_ind] = last_entity;
+            entity_t last_entity = cvec.ind_to_entity[vec_size(cvec.data)-1];
+            cvec.entity_to_ind[last_entity] = component_to_replace;
+            cvec.ind_to_entity[component_to_replace] = last_entity;
             vec_pop(cvec.data);
         }
     }
-    ecs->signatures[entity_id] = 0;
-    sdsclear(ecs->tags[entity_id]);
+    ecs->signatures[__ecs_get_id(entity_id)] = 0;
+    sdsclear(ecs->tags[__ecs_get_id(entity_id)]);
     ecs->number_of_entities--;
+    vec_push(ecs->free_ids, entity_id);
 }
 
 /* TODO LIST */
 /*
-    - Enemy Kill
-    - Id Recycling
+    * Enemy Kill 
+    * Id Recycling
+    - Generations
     - Collisions
     - Gameplay
 */
@@ -200,10 +215,10 @@ int main(void) {
     ecs_register_component(ecs, C_Renderer);
     ecs_register_component(ecs, C_Collider);
 
-    size_t player_ind = new_entity_with_tag(ecs, "Player");
-    ecs_add_component(ecs, player_ind, C_Transform, new_transform((Vector2){20,20}, (Vector2){60,60}, 300.f));
-    ecs_add_component(ecs, player_ind, C_Renderer, {WHITE});
-    ecs_add_component(ecs, player_ind, C_Collider, new_collider(0, 0, 60, 60, 0, 0));
+    entity_t player_id = new_entity_with_tag(ecs, "Player");
+    ecs_add_component(ecs, player_id, C_Transform, new_transform((Vector2){20,20}, (Vector2){60,60}, 300.f));
+    ecs_add_component(ecs, player_id, C_Renderer, {WHITE});
+    ecs_add_component(ecs, player_id, C_Collider, new_collider(0, 0, 60, 60, 0, 0));
     Vector2 player_dir = {0};
 
     /*
@@ -215,8 +230,17 @@ int main(void) {
     add_component(entity_id, entities[entity_id].c_collider, c_colliders, new_collider(0,0,30,50, 0, 0));
     */
 
+    entity_t *entities_to_kill = NULL;
+    vec_init(entities_to_kill, 16);
+
     SetTargetFPS(60);
     while (!WindowShouldClose()) {
+        // Kill Entities
+        for(entity_t *entity=vec_begin(entities_to_kill);entity<vec_end(entities_to_kill);entity++) {
+            kill_entity(ecs, *entity);
+        }
+        vec_erase(entities_to_kill, 0, vec_size(entities_to_kill));
+
         // TODO: First (and hopefully last) time using goto's 
         if(paused) goto drawing;
 
@@ -233,11 +257,12 @@ int main(void) {
         if(IsKeyDown(KEY_D)) {
             player_dir.x = 1;
         }
-        C_Transform *transform = ecs_get_component(ecs, player_ind, C_Transform);
+        C_Transform *transform = ecs_get_component(ecs, player_id, C_Transform);
         transform->velocity = Vector2Scale(Vector2Normalize(player_dir), transform->speed);
 
         if(IsKeyPressed(KEY_N)) {
-            size_t entity_ind = new_entity_with_tag(ecs, "Enemy");
+
+            entity_t entity_ind = new_entity_with_tag(ecs, "Enemy");
             C_Renderer e_renderer = new_renderer((Color){rand()%255, rand()%255, rand()%255, 255});
             ecs_add_component(ecs, entity_ind, C_Renderer, e_renderer);
             C_Transform e_transform = new_transform((Vector2){rand()%(screenWidth), rand()%screenHeight}, (Vector2){10,10}, 200);
@@ -291,7 +316,7 @@ drawing:
             }
         }
         if(IsMouseButtonPressed(0) && selected_entity!=-1) {
-            kill_entity(ecs, selected_entity);
+            vec_push(entities_to_kill, selected_entity);
         }
 
         BeginDrawing();
@@ -299,10 +324,9 @@ drawing:
             BeginMode2D(camera);
             C_Renderer *renderers = ecs_iter_components(ecs, C_Renderer);
             for(size_t rind=0;rind< vec_size(renderers); rind++) {
-                size_t entity_id = __ecs_get_component_vec(ecs, C_Renderer)->ind_to_entity[rind];
-
+                entity_t entity_id = __ecs_get_component_vec(ecs, C_Renderer)->ind_to_entity[rind];
                 C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
-                DrawRectangleV(transform->position, transform->size, renderers[entity_id].color);
+                DrawRectangleV(transform->position, transform->size, renderers[rind].color);
             }
             /*
             for(size_t entity_ind=0;entity_ind<vec_size(ecs->entities);entity_ind++) {
@@ -318,12 +342,11 @@ drawing:
             */
             EndMode2D();
             // ID Display
-            if(selected_entity!=-1) sprintf(id_display_buf, "ID: %d, GEN: %d", selected_entity & 0x0FFF, (uint8_t)(selected_entity << 24));
+            if(selected_entity!=-1) sprintf(id_display_buf, "ID: %d, GEN: 0", __ecs_get_id(selected_entity));
             DrawText(id_display_buf, screenWidth-140, 20, 16, WHITE);
         EndDrawing();
     }
     free_ecs(ecs);
-
     CloseWindow();
     return 0;
 }
