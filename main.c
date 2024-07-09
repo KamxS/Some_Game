@@ -5,6 +5,7 @@
 #include "sds.h"
 #include "sdsalloc.h"
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -176,6 +177,26 @@ void free_ecs(ECS *ecs) {
 #define ecs_iter_components(ecs, component)\
     (component*)((ComponentVec)((struct component_kv*)hashmap_get(ecs->components, &(struct component_kv){.name=#component}))->component_vec).data
 
+#define __component_to_signature(ecs, component) __ecs_get_component_vec(ecs, component)->signature
+#define __bitor_component_signatures_1(ecs, component) __component_to_signature(ecs, component)
+#define __bitor_component_signatures_2(ecs, component, ...) __component_to_signature(ecs, component) | __bitor_component_signatures_1(ecs, __VA_ARGS__)
+#define __bitor_component_signatures_3(ecs, component, ...) __component_to_signature(ecs, component) | __bitor_component_signatures_2(ecs, __VA_ARGS__)
+#define __bitor_component_signatures_4(ecs, component, ...) __component_to_signature(ecs, component) | __bitor_component_signatures_3(ecs, __VA_ARGS__)
+#define __bitor_component_signatures_5(ecs, component, ...) __component_to_signature(ecs, component) | __bitor_component_signatures_4(ecs, __VA_ARGS__)
+
+#define __choose_correct_bitor(_1,_2,_3,_4,_5,name,...) name
+
+// function -> void(*)(ECS*, entity_t)
+#define ecs_foreach_entity(ecs, function, ...)\
+    do {\
+        uint32_t mask = __choose_correct_bitor(__VA_ARGS__, __bitor_component_signatures_5, __bitor_component_signatures_4, __bitor_component_signatures_3, __bitor_component_signatures_2, __bitor_component_signatures_1)(ecs, __VA_ARGS__);\
+        for(size_t n=0;n<MAX_ENTITIES; n++) {\
+            if((ecs->signatures[n] & mask) == mask) {\
+                function(ecs, n);\
+            }\
+        }\
+    }while(0)
+
 entity_t __ecs_get_entity_id(ECS *ecs, ComponentVec *cvec, void *component_ptr) {
     return cvec->ind_to_entity[(component_ptr-cvec->data)/cvec->size_of_component];
 }
@@ -214,6 +235,16 @@ void kill_entity(ECS *ecs, entity_t entity_id) {
     - Entity Management
     - Gameplay
 */
+
+void draw_entity(ECS *ecs, entity_t entity_id) {
+    C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
+    C_Collider *collider= ecs_get_component(ecs, entity_id, C_Collider);
+    Color c = WHITE;
+    if(collider->is_colliding) {
+        c = RED;
+    }
+    DrawRectangleLines(transform->position.x, transform->position.y, transform->size.x, transform->size.y, c);
+}
 
 int main(void) {
     const int screenWidth = 800;
@@ -330,19 +361,7 @@ drawing:
         BeginDrawing();
             ClearBackground(BLACK);
             BeginMode2D(camera);
-            C_Renderer *c_renderers = ecs_iter_components(ecs, C_Renderer);
-            for(C_Renderer *renderer=c_renderers;renderer<vec_end(c_renderers);renderer++){
-                entity_t entity_id = ecs_get_entity_id(ecs, C_Renderer, renderer);
-                C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
-
-                C_Collider *collider= ecs_get_component(ecs, entity_id, C_Collider);
-                Color c = WHITE;
-                if(collider->is_colliding) {
-                    c = RED;
-                }
-                DrawRectangleLines(transform->position.x, transform->position.y, transform->size.x, transform->size.y, c);
-                //DrawRectangleV(transform->position, transform->size, renderer->color);
-            }
+            ecs_foreach_entity(ecs, draw_entity, C_Transform, C_Collider); 
             EndMode2D();
             // ID Display
             if(selected_entity!=-1) sprintf(id_display_buf, "ID: %d, GEN: 0", selected_entity);
