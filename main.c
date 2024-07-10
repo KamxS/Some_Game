@@ -14,6 +14,8 @@
 #define MAX_ENTITIES 5000
 
 typedef uint32_t entity_t;
+struct ECS;
+
 typedef struct ComponentVec {
     void *data;
     size_t size_of_component;
@@ -40,11 +42,27 @@ typedef struct C_Renderer {
     Color color;
 } C_Renderer;
 
+typedef struct C_Camera {
+    Camera2D camera;
+    entity_t following;
+} C_Camera;
+
+typedef void (*component_func_t)(struct ECS*, entity_t);
+typedef struct SystemCallback {
+    component_func_t callback;
+    uint32_t entity_mask;
+} SystemCallback;
+
 typedef struct ECS {
     struct hashmap *components;
     uint32_t *signatures;
     entity_t *free_ids;
     sds *tags;
+
+    struct SystemCallback *on_start;
+    struct SystemCallback *on_update;
+    struct SystemCallback *on_draw;
+
     int number_of_components;
     int number_of_entities;
 } ECS;
@@ -106,6 +124,13 @@ ECS *init_ecs() {
     vec_init(tags, MAX_ENTITIES);
     ecs->tags = tags;
 
+    SystemCallback *on_start = NULL;
+    SystemCallback *on_update = NULL;
+    vec_init(on_start, 16);
+    vec_init(on_update, 16);
+    ecs->on_start = on_start;
+    ecs->on_update= on_update;
+
     entity_t *free_ids = NULL;
     vec_init(free_ids, 64);
     ecs->free_ids = free_ids;
@@ -128,6 +153,8 @@ void free_ecs(ECS *ecs) {
     }
     vec_free(ecs->tags);
     vec_free(ecs->free_ids);
+    vec_free(ecs->on_start);
+    vec_free(ecs->on_update);
     free(ecs);
 }
 
@@ -186,7 +213,6 @@ void free_ecs(ECS *ecs) {
 
 #define __choose_correct_bitor(_1,_2,_3,_4,_5,name,...) name
 
-// function -> void(*)(ECS*, entity_t)
 #define ecs_foreach_entity(ecs, function, ...)\
     do {\
         uint32_t mask = __choose_correct_bitor(__VA_ARGS__, __bitor_component_signatures_5, __bitor_component_signatures_4, __bitor_component_signatures_3, __bitor_component_signatures_2, __bitor_component_signatures_1)(ecs, __VA_ARGS__);\
@@ -194,6 +220,17 @@ void free_ecs(ECS *ecs) {
             if((ecs->signatures[n] & mask) == mask) {\
                 function(ecs, n);\
             }\
+        }\
+    }while(0)
+
+#define ecs_register_system(ecs, type, function, ...)\
+    do {\
+        uint32_t mask = __choose_correct_bitor(__VA_ARGS__, __bitor_component_signatures_5, __bitor_component_signatures_4, __bitor_component_signatures_3, __bitor_component_signatures_2, __bitor_component_signatures_1)(ecs, __VA_ARGS__);\
+        SystemCallback c = {function, mask};\
+        switch(type) {\
+            case 1:\
+                vec_push(ecs->on_update, c);\
+                break;\
         }\
     }while(0)
 
@@ -236,6 +273,11 @@ void kill_entity(ECS *ecs, entity_t entity_id) {
     - Gameplay
 */
 
+void apply_velocity(ECS *ecs, entity_t entity_id) {
+    C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
+    transform->position = Vector2Add(transform->position, Vector2Scale(transform->velocity, GetFrameTime()));
+}
+
 void draw_entity(ECS *ecs, entity_t entity_id) {
     C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
     C_Collider *collider= ecs_get_component(ecs, entity_id, C_Collider);
@@ -267,6 +309,12 @@ int main(void) {
     ecs_add_component(ecs, player_id, C_Collider, new_collider(0, 0, 60, 60, 0, 0));
     Vector2 player_dir = {0};
 
+    /*
+    ecs_add_system(ecs, ON_DRAW, draw, C_Renderer);
+    ecs_add_system(ecs, ON_UPDATE, move, C_Transform, C_Collider);  
+    */
+    ecs_register_system(ecs, 1, apply_velocity, C_Transform);  
+
     entity_t *entities_to_kill = NULL;
     vec_init(entities_to_kill, 16);
     SetTargetFPS(60);
@@ -277,6 +325,14 @@ int main(void) {
                 kill_entity(ecs, *entity);
             }
             vec_erase(entities_to_kill, 0, vec_size(entities_to_kill));
+        }
+
+        for(SystemCallback *func=vec_begin(ecs->on_update);func<vec_end(ecs->on_update);func++) {
+            for(size_t n=0;n<MAX_ENTITIES; n++) {
+                if((ecs->signatures[n] & func->entity_mask) == func->entity_mask) {
+                    func->callback(ecs, n);
+                }
+            }
         }
 
         // TODO: First (and hopefully last) time using goto's 
@@ -315,8 +371,6 @@ int main(void) {
                 Vector2 dir = Vector2Normalize(Vector2Subtract(player_transform->position, transform->position));
                 transform->velocity = Vector2Scale(dir, transform->speed);
             }
-            // Velocity 
-            transform->position = Vector2Add(transform->position, Vector2Scale(transform->velocity, GetFrameTime()));
         }
 
         // Collisions
