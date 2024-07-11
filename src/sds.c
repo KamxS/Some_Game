@@ -36,8 +36,8 @@
 #include <ctype.h>
 #include <assert.h>
 #include <limits.h>
-#include "sds.h"
-#include "sdsalloc.h"
+#include "../include/sds.h"
+#include "../include/sdsalloc.h"
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 

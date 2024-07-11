@@ -1,9 +1,6 @@
 #include "raylib.h"
 #include "raymath.h"
-#include "vector.h"
-#include "hashmap.h"
-#include "sds.h"
-#include "sdsalloc.h"
+#include "include/kxecs.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,13 +41,14 @@ typedef struct C_Renderer {
 
 typedef struct C_Camera {
     Camera2D camera;
-    entity_t following;
+    char* following_tag;
 } C_Camera;
 
 typedef void (*component_func_t)(struct ECS*, entity_t);
 typedef struct SystemCallback {
     component_func_t callback;
     uint32_t entity_mask;
+    sds *tags;
 } SystemCallback;
 
 typedef struct ECS {
@@ -153,6 +151,19 @@ void free_ecs(ECS *ecs) {
     }
     vec_free(ecs->tags);
     vec_free(ecs->free_ids);
+
+    if(ecs->on_start->tags != NULL) {
+        for(sds *tag=vec_begin(ecs->on_start->tags); tag<vec_end(ecs->on_start->tags);tag++) {
+            sdsfree(*tag);
+        }
+        vec_free(ecs->on_start->tags);
+    }
+    if(ecs->on_update->tags != NULL) {
+        for(sds *tag=vec_begin(ecs->on_update->tags); tag<vec_end(ecs->on_update->tags);tag++) {
+            sdsfree(*tag);
+        }
+        vec_free(ecs->on_update->tags);
+    }
     vec_free(ecs->on_start);
     vec_free(ecs->on_update);
     free(ecs);
@@ -176,7 +187,7 @@ void free_ecs(ECS *ecs) {
 //#define __ecs_get_generation(entity_id) ((entity_id & 0xF000)>>24)
 
 // TODO: Not the biggest fan of this
-#define ecs_add_component(ecs, entity_id, component, component_init) \
+#define ecs_add_component(ecs, entity_id, component, ...) \
     do {\
         ComponentVec *cvec = __ecs_get_component_vec(ecs, component);\
         size_t ind = vec_size(cvec->data);\
@@ -185,7 +196,7 @@ void free_ecs(ECS *ecs) {
         component *vec = cvec->data;\
         bool update = false;\
         if(vec_size(vec) >= vec_capacity(vec)) update=true;\
-        component n_component = component_init;\
+        component n_component = __VA_ARGS__;\
         vec_push(vec, n_component);\
         if(update) {cvec->data=vec;hashmap_set(ecs->components, &(struct component_kv){ #component, *cvec });}\
         ecs->signatures[__ecs_get_id(entity_id)] |= cvec->signature;\
@@ -227,17 +238,40 @@ void free_ecs(ECS *ecs) {
     do {\
         uint32_t mask = __choose_correct_bitor(__VA_ARGS__, __bitor_component_signatures_5, __bitor_component_signatures_4, __bitor_component_signatures_3, __bitor_component_signatures_2, __bitor_component_signatures_1)(ecs, __VA_ARGS__);\
         SystemCallback c = {function, mask};\
+        c.tags = NULL;\
         switch(type) {\
             case 1:\
                 vec_push(ecs->on_update, c);\
                 break;\
         }\
     }while(0)
+#define ecs_register_tag_system(ecs, type, function, ...)\
+    do {\
+        char* tags[] = {__VA_ARGS__};\
+        sds *stags = NULL;\
+        vec_init(stags, 8);\
+        SystemCallback callback = {function, 0};\
+        for(size_t ind=0;ind<sizeof(tags)/sizeof(tags[0]);ind++) {\
+            sds tag=sdsnew(tags[ind]);\
+            vec_push(stags, tag);\
+        }\
+        callback.tags = stags;\
+        vec_push(ecs->on_update, callback);\
+    }while(0)
 
 entity_t __ecs_get_entity_id(ECS *ecs, ComponentVec *cvec, void *component_ptr) {
     return cvec->ind_to_entity[(component_ptr-cvec->data)/cvec->size_of_component];
 }
 #define ecs_get_entity_id(ecs, component_type, component_ptr) __ecs_get_entity_id(ecs, __ecs_get_component_vec(ecs,component_type), component_ptr)
+size_t sds_vector_find(sds *vec, sds value, size_t start) {
+    for(size_t ind=start;ind<vec_size(vec);ind++) {
+        if(strcmp(vec[ind],value)==0) {
+            return ind;
+        }
+    }
+    return -1;
+}
+#define ecs_find_entity_with_tag(ecs, tag) sds_vector_find(ecs->tags, tag, 0)
 
 void kill_entity(ECS *ecs, entity_t entity_id) {
     size_t iter = 0;
@@ -265,17 +299,43 @@ void kill_entity(ECS *ecs, entity_t entity_id) {
 
 /* TODO LIST */
 /*
-    - Better Pause
+    - Cleanup
+    - Pause
     - Generations
     - Collisions
-    - Better System Management
-    - Entity Management
+    - More Flexible Entity Management
+    - Better Kill & Spawn System
     - Gameplay
 */
+
+void player_movement(ECS *ecs, entity_t entity_id) {
+    Vector2 player_dir = {0};
+    if(IsKeyDown(KEY_W)) {
+        player_dir.y = -1;
+    }
+    if(IsKeyDown(KEY_S)) {
+        player_dir.y = 1;
+    }
+    if(IsKeyDown(KEY_A)) {
+        player_dir.x = -1;
+    }
+    if(IsKeyDown(KEY_D)) {
+        player_dir.x = 1;
+    }
+    C_Transform *player_transform = ecs_get_component(ecs, entity_id, C_Transform);
+    player_transform->velocity = Vector2Scale(Vector2Normalize(player_dir), player_transform->speed);
+}
 
 void apply_velocity(ECS *ecs, entity_t entity_id) {
     C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
     transform->position = Vector2Add(transform->position, Vector2Scale(transform->velocity, GetFrameTime()));
+}
+
+void enemy_ai(ECS *ecs, entity_t entity_id) {
+    C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
+    C_Transform *player_transform = ecs_get_component(ecs, ecs_find_entity_with_tag(ecs, "Player"), C_Transform);
+    Vector2 dir = Vector2Normalize(Vector2Subtract(player_transform->position, transform->position));
+    transform->velocity = Vector2Scale(dir, transform->speed);
 }
 
 void draw_entity(ECS *ecs, entity_t entity_id) {
@@ -288,6 +348,33 @@ void draw_entity(ECS *ecs, entity_t entity_id) {
     DrawRectangleLines(transform->position.x, transform->position.y, transform->size.x, transform->size.y, c);
 }
 
+void check_collisions(ECS *ecs, entity_t entity_id) {
+    C_Collider *collider = ecs_get_component(ecs, entity_id, C_Collider);
+    C_Transform *collider_transform = ecs_get_component(ecs, entity_id, C_Transform);
+    bool is_colliding = false;
+
+    C_Collider *c_colliders = ecs_iter_components(ecs, C_Collider);
+    for(C_Collider* collision=vec_begin(c_colliders); collision<vec_end(c_colliders); collision++) {
+        if(collider==collision) continue;
+        // Category Check
+        // Bounding Box Check
+        C_Transform *collision_transform = ecs_get_component(ecs, ecs_get_entity_id(ecs, C_Collider, collision), C_Transform);
+        Rectangle collider_rect  = {collider_transform->position.x, collider_transform->position.y, collider_transform->size.x, collider_transform->size.y};
+        Rectangle collision_rect = {collision_transform->position.x, collision_transform->position.y, collision_transform->size.x, collision_transform->size.y};
+        if(CheckCollisionRecs(collider_rect, collision_rect)) {
+            is_colliding = true;
+            break;
+        }
+    }
+    collider->is_colliding = is_colliding;
+}
+
+void camera_follow(ECS *ecs, entity_t entity_id) {
+    C_Camera *c_camera = ecs_get_component(ecs, entity_id, C_Camera);
+    C_Transform *to_follow = ecs_get_component(ecs, ecs_find_entity_with_tag(ecs, c_camera->following_tag), C_Transform);
+    c_camera->camera.target = to_follow->position;
+}
+
 int main(void) {
     const int screenWidth = 800;
     const int screenHeight = 450;
@@ -295,25 +382,32 @@ int main(void) {
 
     srand(time(0));
     InitWindow(screenWidth, screenHeight, "Game");
-    Camera2D camera = {(Vector2){0,0}, (Vector2){0,0}, 0.f, 1.f};
     char id_display_buf[64] = "";
-
     ECS *ecs = init_ecs();
     ecs_register_component(ecs, C_Transform);
     ecs_register_component(ecs, C_Renderer);
     ecs_register_component(ecs, C_Collider);
+    ecs_register_component(ecs, C_Camera);
 
     entity_t player_id = new_entity_with_tag(ecs, "Player");
-    ecs_add_component(ecs, player_id, C_Transform, new_transform((Vector2){20,20}, (Vector2){60,60}, 300.f));
+    C_Transform player_transform = new_transform((Vector2){20,20}, (Vector2){60,60}, 300.f);
+    ecs_add_component(ecs, player_id, C_Transform, player_transform);
     ecs_add_component(ecs, player_id, C_Renderer, {WHITE});
     ecs_add_component(ecs, player_id, C_Collider, new_collider(0, 0, 60, 60, 0, 0));
-    Vector2 player_dir = {0};
+
+    entity_t camera_id = new_entity_with_tag(ecs, "Main Camera");
+    Camera2D camera = {(Vector2){(screenWidth/2)-player_transform.size.x/2,screenHeight/2-player_transform.size.y/2}, (Vector2){0,0}, 0.f, 1.f};
+    ecs_add_component(ecs, camera_id, C_Camera, {camera, "Player"}); 
 
     /*
     ecs_add_system(ecs, ON_DRAW, draw, C_Renderer);
     ecs_add_system(ecs, ON_UPDATE, move, C_Transform, C_Collider);  
     */
     ecs_register_system(ecs, 1, apply_velocity, C_Transform);  
+    ecs_register_system(ecs, 1, check_collisions, C_Transform, C_Collider);  
+    ecs_register_system(ecs, 1, camera_follow, C_Camera);  
+    ecs_register_tag_system(ecs, 1, player_movement, "Player");
+    ecs_register_tag_system(ecs, 1, enemy_ai, "Enemy");
 
     entity_t *entities_to_kill = NULL;
     vec_init(entities_to_kill, 16);
@@ -327,33 +421,7 @@ int main(void) {
             vec_erase(entities_to_kill, 0, vec_size(entities_to_kill));
         }
 
-        for(SystemCallback *func=vec_begin(ecs->on_update);func<vec_end(ecs->on_update);func++) {
-            for(size_t n=0;n<MAX_ENTITIES; n++) {
-                if((ecs->signatures[n] & func->entity_mask) == func->entity_mask) {
-                    func->callback(ecs, n);
-                }
-            }
-        }
-
-        // TODO: First (and hopefully last) time using goto's 
-        if(paused) goto drawing;
-
-        player_dir = (Vector2){0};
-        if(IsKeyDown(KEY_W)) {
-            player_dir.y = -1;
-        }
-        if(IsKeyDown(KEY_S)) {
-            player_dir.y = 1;
-        }
-        if(IsKeyDown(KEY_A)) {
-            player_dir.x = -1;
-        }
-        if(IsKeyDown(KEY_D)) {
-            player_dir.x = 1;
-        }
-        C_Transform *player_transform = ecs_get_component(ecs, player_id, C_Transform);
-        player_transform->velocity = Vector2Scale(Vector2Normalize(player_dir), player_transform->speed);
-
+        // Spawn Entities
         if(IsKeyPressed(KEY_N)) {
             entity_t entity_ind = new_entity_with_tag(ecs, "Enemy");
             C_Renderer e_renderer = new_renderer((Color){rand()%255, rand()%255, rand()%255, 255});
@@ -363,44 +431,32 @@ int main(void) {
             ecs_add_component(ecs, entity_ind, C_Collider, new_collider(0, 0, 10, 10, 0, 0));
         }
 
-        C_Transform *c_transforms = ecs_iter_components(ecs, C_Transform);
-        for(C_Transform* transform=vec_begin(c_transforms); transform<vec_end(c_transforms); transform++) {
-            entity_t entity_id = ecs_get_entity_id(ecs, C_Transform, transform);
-            // Enemy "AI"
-            if(strcmp(ecs_get_tag(ecs, entity_id), "Enemy") == 0) {
-                Vector2 dir = Vector2Normalize(Vector2Subtract(player_transform->position, transform->position));
-                transform->velocity = Vector2Scale(dir, transform->speed);
+        // TODO!
+        //ecs_set_system(ecs, on_update);
+        for(SystemCallback *func=vec_begin(ecs->on_update);func<vec_end(ecs->on_update);func++) {
+            if(func->tags!=NULL) {
+                for(size_t n=0;n<MAX_ENTITIES; n++) {
+                    if(ecs->tags[n]==0) continue;
+                    for(sds *tag=vec_begin(func->tags);tag<vec_end(func->tags);tag++) {
+                        if(strcmp(ecs->tags[n], *tag)==0) {
+                            func->callback(ecs, n);
+                            break;
+                        }
+                    }
+                }
+                continue;
             }
-        }
-
-        // Collisions
-        C_Collider *c_colliders = ecs_iter_components(ecs, C_Collider);
-        for(C_Collider* collider=vec_begin(c_colliders); collider<vec_end(c_colliders); collider++) {
-            bool is_colliding = false;
-            for(C_Collider* collision=vec_begin(c_colliders); collision<vec_end(c_colliders); collision++) {
-                if(collider==collision) continue;
-                // Category Check
-                // Bounding Box Check
-                C_Transform *collider_transform = ecs_get_component(ecs, ecs_get_entity_id(ecs, C_Collider, collider), C_Transform);
-                C_Transform *collision_transform = ecs_get_component(ecs, ecs_get_entity_id(ecs, C_Collider, collision), C_Transform);
-                Rectangle collider_rect  = {collider_transform->position.x, collider_transform->position.y, collider_transform->size.x, collider_transform->size.y};
-                Rectangle collision_rect = {collision_transform->position.x, collision_transform->position.y, collision_transform->size.x, collision_transform->size.y};
-                if(CheckCollisionRecs(collider_rect, collision_rect)) {
-                    is_colliding = true;
-                    break;
+            for(size_t n=0;n<MAX_ENTITIES; n++) {
+                if((ecs->signatures[n] & func->entity_mask) == func->entity_mask) {
+                    func->callback(ecs, n);
                 }
             }
-            collider->is_colliding = is_colliding;
         }
 
-// TODO: Remove This!!
-drawing:
-        if(IsKeyPressed(KEY_P)) {
-            paused = !paused;
-        }
-
+        C_Camera *c_camera = ecs_get_component(ecs, ecs_find_entity_with_tag(ecs, "Main Camera"), C_Camera);
         // ID Display + Entity by Click Kill
-        Vector2 mousePos = GetScreenToWorld2D(GetMousePosition(), camera);
+        C_Transform *c_transforms = ecs_iter_components(ecs, C_Transform);
+        Vector2 mousePos = GetScreenToWorld2D(GetMousePosition(), c_camera->camera);
         size_t selected_entity = -1;
         for(size_t transform_ind =0; transform_ind<vec_size(c_transforms); transform_ind++) {
             C_Transform transform = c_transforms[transform_ind];
@@ -414,7 +470,7 @@ drawing:
 
         BeginDrawing();
             ClearBackground(BLACK);
-            BeginMode2D(camera);
+            BeginMode2D(c_camera->camera);
             ecs_foreach_entity(ecs, draw_entity, C_Transform, C_Collider); 
             EndMode2D();
             // ID Display
