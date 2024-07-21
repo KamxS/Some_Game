@@ -67,7 +67,6 @@ int component_compare(const void *a, const void *b, void *udata);
 uint64_t component_hash(const void *item, uint64_t seed0, uint64_t seed1);
 size_t sds_vector_find(sds *vec, sds value, size_t start);
 
-
 #define ecs_register_component(ecs, component)\
     do { \
         ComponentVec cvec = {0};\

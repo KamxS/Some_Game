@@ -104,7 +104,7 @@ void __ecs_erase_entity(ECS *ecs, entity_t entity_id) {
         }
     }
     ecs->signatures[__ecs_get_id(entity_id)] = 0;
-    sdsclear(ecs->tags[__ecs_get_id(entity_id)]);
+    if(ecs->tags[__ecs_get_id(entity_id)]) sdsclear(ecs->tags[__ecs_get_id(entity_id)]);
     ecs->number_of_entities--;
     vec_push(ecs->free_ids, entity_id);
 }
