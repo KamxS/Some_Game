@@ -11,9 +11,6 @@
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 450
 
-#define MAX_DOT_PRODUCT(v1,v2, dir) \
-    Vector2DotProduct(v1,dir)>Vector2DotProduct(v2,dir) ? v1 : v2
-
 typedef struct C_Transform {
   Vector2 position;
   Vector2 size;
@@ -79,8 +76,8 @@ C_Collider new_collider_rect(float x, float y, float width, float height, long l
     nc.collider_info.vertices_info.n_of_vertices = 4;
     nc.collider_info.vertices_info.vertices[0] = (Vector2){0,0};
     nc.collider_info.vertices_info.vertices[1] = (Vector2){width,0};
-    nc.collider_info.vertices_info.vertices[2] = (Vector2){0,height};
-    nc.collider_info.vertices_info.vertices[3] = (Vector2){width,height};
+    nc.collider_info.vertices_info.vertices[2] = (Vector2){width,height};
+    nc.collider_info.vertices_info.vertices[3] = (Vector2){0,height};
 
     nc.layer = layer;
     nc.layer_mask = layer_mask;
@@ -144,6 +141,31 @@ void draw_entity_sys(ECS *ecs, entity_t entity_id) {
     } else {
         if(renderer->shape_t==RECT) DrawRectangleV(transform->position, transform->size, renderer->color);
         if(renderer->shape_t==CIRCLE) DrawCircleV(transform->position, (transform->size.x)/2, renderer->color);
+    }
+}
+
+void draw_colliders_debug_sys(ECS *ecs, entity_t entity_id) {
+    C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
+    C_Collider *collider = ecs_get_component(ecs, entity_id, C_Collider);
+    Color c = WHITE;
+    if(collider->is_colliding) c=RED;
+
+    switch(collider->collider_info.collider_t) {
+        case(COLLIDER_VERTICES):
+            for(size_t ind = 0;ind<collider->collider_info.vertices_info.n_of_vertices-1;ind++) {
+                Vector2 pos1 = Vector2Add(collider->collider_info.vertices_info.vertices[ind], transform->position);
+                Vector2 pos2 = Vector2Add(collider->collider_info.vertices_info.vertices[ind+1], transform->position);
+                DrawLineV(pos1,pos2,c);
+            }
+            Vector2 pos1 = Vector2Add(collider->collider_info.vertices_info.vertices[0], transform->position);
+            Vector2 pos2 = Vector2Add(collider->collider_info.vertices_info.vertices[collider->collider_info.vertices_info.n_of_vertices-1], transform->position);
+            DrawLineV(pos1,pos2, c);
+            break;
+        case(COLLIDER_CIRCLE):
+            Vector2 pos = Vector2Add(transform->position, collider->collider_info.circle_info.offset);
+            float r = collider->collider_info.circle_info.radius;
+            DrawRing(pos, r-2, r, 0, 360, 36, c);
+            break;
     }
 }
 
@@ -225,10 +247,10 @@ bool check_gjk_collision(ECS *ecs, C_Collider *collider, C_Collider* collision) 
     return false;
 }
 
-int collisions = 0;
 void check_collisions_sys(ECS *ecs, entity_t entity_id) {
     C_Collider *collider = ecs_get_component(ecs, entity_id, C_Collider);
 
+    collider->is_colliding =false;
     C_Collider *c_colliders = ecs_iter_components(ecs, C_Collider);
     for (C_Collider *collision = vec_begin(c_colliders); collision < vec_end(c_colliders); collision++) {
         if (collider == collision) {
@@ -236,8 +258,10 @@ void check_collisions_sys(ECS *ecs, entity_t entity_id) {
         }
         // Category Check
         // GJK Check
-        if(check_gjk_collision(ecs, collider, collision)) printf("COLLISION %d!\n", collisions++);
-        break;
+        if(check_gjk_collision(ecs, collider, collision)) {
+            collider->is_colliding = true;
+            break;
+        }
     }
 }
 
@@ -289,8 +313,14 @@ int main(void) {
     C_Transform player_transform = new_transform((Vector2){20, 20}, (Vector2){60, 60}, 300.f);
     ecs_add_component(ecs, player_id, C_Transform, player_transform);
     ecs_add_component(ecs, player_id, C_Renderer, {WHITE, player_texture, true, RECT});
-    ecs_add_component(ecs, player_id, C_Collider, new_collider_rect(0, 0, 60, 60, 0, 0));
+    ecs_add_component(ecs, player_id, C_Collider, new_collider_circle(15.f, 15.f, 20.f, 0, 0));
     // End Of Player Definition
+    
+    entity_t static_e = new_entity(ecs);
+    C_Transform static_t = new_transform((Vector2){120, 20}, (Vector2){100, 100}, 0.f);
+    ecs_add_component(ecs, static_e, C_Transform, static_t);
+    ecs_add_component(ecs, static_e, C_Renderer, {RED, (Texture){0}, false, RECT});
+    ecs_add_component(ecs, static_e, C_Collider, new_collider_rect(0, 0, 100, 100, 0, 0));
 
     entity_t camera_id = new_entity_with_tag(ecs, "Main Camera");
     Camera2D camera = {
@@ -308,6 +338,7 @@ int main(void) {
     ecs_register_tag_system(ecs, ON_UPDATE, enemy_ai_sys, "Enemy");
     ecs_register_system(ecs, ON_UPDATE, spawn_enemy_sys);
     ecs_register_component_system(ecs, ON_DRAW, draw_entity_sys, C_Renderer, C_Transform);
+    ecs_register_component_system(ecs, ON_DRAW, draw_colliders_debug_sys,C_Transform, C_Collider); 
 
     float seconds = 0.f;
     SetTargetFPS(60);
