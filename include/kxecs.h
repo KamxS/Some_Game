@@ -24,12 +24,13 @@ typedef struct SystemCallback {
     sds *tags;
 } SystemCallback;
 
-#define NUM_OF_SYSTEM_TYPES 4
+#define NUM_OF_SYSTEM_TYPES 5
 enum system_type {
     ON_START,
     ON_PREUPDATE,
     ON_UPDATE,
-    ON_DRAW
+    ON_DRAW,
+    ON_END
 };
 
 typedef struct ECS {
