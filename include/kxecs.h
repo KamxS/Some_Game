@@ -9,7 +9,7 @@
 typedef uint32_t entity_t;
 struct ECS;
 
-typedef struct ComponentVec {
+typedef struct {
     void *data;
     size_t size_of_component;
     size_t *entity_to_ind;    
@@ -18,7 +18,7 @@ typedef struct ComponentVec {
 } ComponentVec;
 
 typedef void (*component_func_t)(struct ECS*, entity_t);
-typedef struct SystemCallback {
+typedef struct {
     component_func_t callback;
     uint32_t entity_mask;
     sds *tags;
@@ -40,7 +40,7 @@ typedef struct ECS {
     entity_t *entities_to_kill;
     entity_t *free_ids;
     sds *tags;
-    struct SystemCallback *systems[NUM_OF_SYSTEM_TYPES];
+    SystemCallback *systems[NUM_OF_SYSTEM_TYPES];
 
     int number_of_components;
     int number_of_entities;

@@ -11,7 +11,7 @@
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 450
 
-typedef struct C_Transform {
+typedef struct {
   Vector2 position;
   Vector2 size;
   float speed;
@@ -20,7 +20,7 @@ typedef struct C_Transform {
 
 enum ColliderType { COLLIDER_VERTICES, COLLIDER_CIRCLE };
 
-typedef struct ColliderInfo {
+typedef struct {
     enum ColliderType collider_t;
     union {
         // Vertices' positions are relative to object's position
@@ -36,7 +36,7 @@ typedef struct ColliderInfo {
     };
 } ColliderInfo;
 
-typedef struct C_Collider {
+typedef struct {
     ColliderInfo collider_info;
     enum ColliderType collider_t;
     long layer;
@@ -45,14 +45,14 @@ typedef struct C_Collider {
 } C_Collider;
 
 enum ShapeType {RECT, CIRCLE};
-typedef struct C_Renderer {
+typedef struct {
     Color color;
     Texture texture;
     bool has_texture;
     enum ShapeType shape_t;
 } C_Renderer;
 
-typedef struct C_Camera {
+typedef struct {
     Camera2D camera;
     char *following_tag;
 } C_Camera;
@@ -85,6 +85,11 @@ C_Collider new_collider_rect(float x, float y, float width, float height, long l
 }
 /* TODO LIST */
 /*
+    - Tags for systems:
+    ecs_register_system(move)
+    ecs_register_system(pause_menu, PAUSE_SYS)
+    if(key==ECS) ECS_SET_SYSTEM_TAG(PAUSE_SYS)
+    - Tilemap
     - Cleanup
     - Pause
     - Generations
@@ -95,10 +100,6 @@ C_Collider new_collider_rect(float x, float y, float width, float height, long l
     - More Flexible Entity Management
     - Better Kill & Spawn System
     - Gameplay
-        - Heavily Music Based Game
-        - Music Pulsating Wormholes
-        - Ships in a musical instrument shapes
-        - Synthwave Aesthetic
 */
 
 void player_movement_sys(ECS *ecs, entity_t entity_id) {
