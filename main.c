@@ -88,7 +88,7 @@ C_Collider new_collider_rect(float x, float y, float width, float height, long l
     - Tags for systems:
     ecs_register_system(move)
     ecs_register_system(pause_menu, PAUSE_SYS)
-    if(key==ECS) ECS_SET_SYSTEM_TAG(PAUSE_SYS)
+    if(key==Escape) ECS_SET_SYSTEM_TAG(PAUSE_SYS)
     - Tilemap
     - Cleanup
     - Pause
