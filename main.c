@@ -42,6 +42,7 @@ typedef struct {
     long layer;
     long layer_mask;
     bool is_colliding;
+    Vector2 simplex[3];
 } C_Collider;
 
 enum ShapeType {RECT, CIRCLE};
@@ -199,6 +200,63 @@ Vector2 support_function(Vector2 position, ColliderInfo collider_info, Vector2 d
     }
 }
 
+Vector2 get_epa_penetration_vec(ECS *ecs, C_Collider *collider) {
+    C_Transform *transform = ecs_get_component(ecs, ecs_get_entity_id(ecs, C_Collider, collider), C_Transform);
+    Vector2 *simplex;
+    vec_init(simplex, 16);
+    vec_push(simplex, collider->simplex[0]);
+    vec_push(simplex, collider->simplex[1]);
+    vec_push(simplex, collider->simplex[2]);
+
+    // winding of simplex
+    float e0 = (simplex[1].x-simplex[0].x) * (simplex[1].y + simplex[0].y);
+    float e1 = (simplex[2].x - simplex[1].x) * (simplex[2].y + simplex[1].y);
+    float e2 = (simplex[0].x - simplex[2].x) * (simplex[0].y + simplex[2].y);
+    bool clockwise_winding = (e0 + e1 + e2 >= 0);
+
+    Vector2 penetration_vec = {0};
+    for(int i=0;i<32;i++) {
+        // Find closest edge to origin
+        size_t closest_ind =-1;
+        float closest_dist;
+        Vector2 closest_normal;
+        for(size_t i=0;i<vec_size(simplex);i++) {
+            size_t j = (i+1)%vec_size(simplex);
+
+            // calculate the edge as v[j] - v[i]
+            Vector2 edge = Vector2Subtract(simplex[j], simplex[i]);
+
+            // calculate the outward-facing normal of the edge
+            Vector2 edge_normal_out;
+            if(clockwise_winding) {
+                edge_normal_out=(Vector2){edge.y,-edge.x};
+            }else {
+                edge_normal_out=(Vector2){-edge.y,edge.x};
+            }
+            edge_normal_out = Vector2Normalize(edge_normal_out);
+
+            // calculate how far away the edge is from the origin
+            float dist = Vector2DotProduct(edge_normal_out, simplex[i]);
+            if(dist < closest_dist || closest_ind==-1) {
+                closest_dist = dist;
+                closest_normal = edge_normal_out;
+                closest_ind = j;
+            }
+        }
+        Vector2 sup = support_function(transform->position, collider->collider_info, closest_normal);
+        float dist = Vector2DotProduct(sup, closest_normal);
+        penetration_vec = Vector2Scale(closest_normal, dist);
+        if(abs(dist-closest_dist)<=0.00001) {
+            return penetration_vec;
+        }else {
+            vec_push(simplex, simplex[closest_ind]);
+            simplex[closest_ind]=sup;
+        }
+    }
+    vec_free(simplex);
+    return penetration_vec;
+}
+
 bool check_gjk_collision(ECS *ecs, C_Collider *collider, C_Collider* collision) {
     C_Transform *collider_transform = ecs_get_component(ecs, ecs_get_entity_id(ecs, C_Collider, collider), C_Transform);
     C_Transform *collision_transform = ecs_get_component(ecs, ecs_get_entity_id(ecs, C_Collider, collision), C_Transform);
@@ -240,6 +298,7 @@ bool check_gjk_collision(ECS *ecs, C_Collider *collider, C_Collider* collision) 
         }else if(Vector3DotProduct((Vector3){p1_to_origin.x, p1_to_origin.y,0}, p1_to_p3_perpendicular)>=0) {
             dir=Vector2Normalize((Vector2){p1_to_p3_perpendicular.x, p1_to_p3_perpendicular.y});
         }else {
+            memcpy(collider->simplex,simplex, sizeof(simplex));
             return true;
         }
         simplex[1]=simplex[2];
@@ -250,6 +309,7 @@ bool check_gjk_collision(ECS *ecs, C_Collider *collider, C_Collider* collision) 
 
 void check_collisions_sys(ECS *ecs, entity_t entity_id) {
     C_Collider *collider = ecs_get_component(ecs, entity_id, C_Collider);
+    C_Transform *transform = ecs_get_component(ecs, entity_id, C_Transform);
 
     collider->is_colliding =false;
     C_Collider *c_colliders = ecs_iter_components(ecs, C_Collider);
@@ -261,6 +321,8 @@ void check_collisions_sys(ECS *ecs, entity_t entity_id) {
         // GJK Check
         if(check_gjk_collision(ecs, collider, collision)) {
             collider->is_colliding = true;
+            Vector2 pen_test = get_epa_penetration_vec(ecs, collider);
+            //transform->position = Vector2Subtract(transform->position, pen_test);
             break;
         }
     }
@@ -368,7 +430,7 @@ int main(void) {
         BeginDrawing();
         ClearBackground(BLACK);
         BeginMode2D(c_camera->camera);
-        ecs_call_system(ecs, ON_DRAW);
+            ecs_call_system(ecs, ON_DRAW);
         EndMode2D();
 
         // BeginShaderMode(space_curvature_shd);
