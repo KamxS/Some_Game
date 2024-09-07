@@ -200,9 +200,8 @@ Vector2 support_function(Vector2 position, ColliderInfo collider_info, Vector2 d
     }
 }
 
-Vector2 get_epa_penetration_vec(ECS *ecs, C_Collider *collider) {
-    C_Transform *transform = ecs_get_component(ecs, ecs_get_entity_id(ecs, C_Collider, collider), C_Transform);
-    Vector2 *simplex;
+Vector2 get_epa_penetration_vec(C_Collider *collider, C_Transform *transform) {
+    Vector2 *simplex=NULL;
     vec_init(simplex, 16);
     vec_push(simplex, collider->simplex[0]);
     vec_push(simplex, collider->simplex[1]);
@@ -246,7 +245,7 @@ Vector2 get_epa_penetration_vec(ECS *ecs, C_Collider *collider) {
         Vector2 sup = support_function(transform->position, collider->collider_info, closest_normal);
         float dist = Vector2DotProduct(sup, closest_normal);
         penetration_vec = Vector2Scale(closest_normal, dist);
-        if(abs(dist-closest_dist)<=0.00001) {
+        if(abs(dist-closest_dist)<=0.0000001) {
             return penetration_vec;
         }else {
             vec_push(simplex, simplex[closest_ind]);
@@ -321,8 +320,14 @@ void check_collisions_sys(ECS *ecs, entity_t entity_id) {
         // GJK Check
         if(check_gjk_collision(ecs, collider, collision)) {
             collider->is_colliding = true;
-            Vector2 pen_test = get_epa_penetration_vec(ecs, collider);
-            //transform->position = Vector2Subtract(transform->position, pen_test);
+            Vector2 pen_test = get_epa_penetration_vec(collider, transform);
+
+            sds tag = ecs_get_tag(ecs, entity_id);
+            if(tag) {
+                if(strcmp(tag, "Player")==0) {
+                    transform->position = Vector2Subtract(transform->position, pen_test);
+                }
+            }
             break;
         }
     }
@@ -330,6 +335,7 @@ void check_collisions_sys(ECS *ecs, entity_t entity_id) {
 
 void camera_follow_sys(ECS *ecs, entity_t entity_id) {
     C_Camera *c_camera = ecs_get_component(ecs, entity_id, C_Camera);
+    size_t ind = sds_vector_find(ecs->tags, sdsnew(c_camera->following_tag), 0);
     C_Transform *to_follow = ecs_get_component(ecs, ecs_find_entity_with_tag(ecs, c_camera->following_tag), C_Transform);
     c_camera->camera.target = to_follow->position;
 }
@@ -437,8 +443,11 @@ int main(void) {
         // EndShaderMode();
 
         // ID Display
-        if (selected_entity != -1) sprintf(id_display_buf, "ID: %d, GEN: 0", selected_entity);
-        DrawText(id_display_buf, GetScreenWidth() - 140, 20, 16, WHITE);
+        if (selected_entity != -1) {
+            C_Transform *t = ecs_get_component(ecs, selected_entity, C_Transform);
+            sprintf(id_display_buf, "ID: %d, GEN: 0, X: %6.2f, Y: %6.2f", selected_entity, t->position.x, t->position.y);
+        }
+        DrawText(id_display_buf, GetScreenWidth() - 300, 20, 16, WHITE);
         EndDrawing();
     }
     free_ecs(ecs);

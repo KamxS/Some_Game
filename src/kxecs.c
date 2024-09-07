@@ -4,6 +4,7 @@
 ECS *init_ecs() { ECS *ecs = malloc(sizeof(ECS)); ecs->components = hashmap_new(sizeof(struct component_kv), 0, 0, 0,component_hash, component_compare, NULL, NULL); ecs->number_of_components = 0; ecs->number_of_entities = 0; uint32_t *signatures = NULL; vec_init(signatures, MAX_ENTITIES); ecs->signatures = signatures;
     sds *tags = NULL;
     vec_init(tags, MAX_ENTITIES);
+    vec_get_base(tags)->size = MAX_ENTITIES;
     ecs->tags = tags;
 
     for(size_t ind=0;ind<NUM_OF_SYSTEM_TYPES;ind++) {
@@ -148,6 +149,7 @@ uint64_t component_hash(const void *item, uint64_t seed0, uint64_t seed1) {
 
 size_t sds_vector_find(sds *vec, sds value, size_t start) {
     for(size_t ind=start;ind<vec_size(vec);ind++) {
+        if(vec[ind]==0) continue;
         if(strcmp(vec[ind],value)==0) {
             return ind;
         }
