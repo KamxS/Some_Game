@@ -1,9 +1,10 @@
+#include <stdio.h>
+#include <math.h>
 #include "include/kxecs.h"
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -57,6 +58,12 @@ typedef struct {
     Camera2D camera;
     char *following_tag;
 } C_Camera;
+
+typedef struct {
+    Vector2 start;
+    Vector2 end;
+    Vector2 pen_vec;
+} C_Debug;
 
 C_Transform new_transform(Vector2 position, Vector2 size, float speed) {
     return (C_Transform){position, size, speed, (Vector2){0, 0}};
@@ -200,7 +207,7 @@ Vector2 support_function(Vector2 position, ColliderInfo collider_info, Vector2 d
     }
 }
 
-Vector2 get_epa_penetration_vec(C_Collider *collider, C_Transform *transform) {
+Vector2 get_epa_penetration_vec(C_Collider *collider, C_Transform *transform, C_Debug *_debug) {
     Vector2 *simplex=NULL;
     vec_init(simplex, 16);
     vec_push(simplex, collider->simplex[0]);
@@ -214,16 +221,20 @@ Vector2 get_epa_penetration_vec(C_Collider *collider, C_Transform *transform) {
     bool clockwise_winding = (e0 + e1 + e2 >= 0);
 
     Vector2 penetration_vec = {0};
-    for(int i=0;i<32;i++) {
+    for(int it=0;it<32;it++) {
         // Find closest edge to origin
         size_t closest_ind =-1;
+        size_t closest_ind2 =-1;
         float closest_dist;
         Vector2 closest_normal;
+
+        Vector2 d_edge;
+
         for(size_t i=0;i<vec_size(simplex);i++) {
             size_t j = (i+1)%vec_size(simplex);
 
-            // calculate the edge as v[j] - v[i]
-            Vector2 edge = Vector2Subtract(simplex[j], simplex[i]);
+            // calculate the edge
+            Vector2 edge = Vector2Subtract(simplex[i], simplex[j]);
 
             // calculate the outward-facing normal of the edge
             Vector2 edge_normal_out;
@@ -232,20 +243,30 @@ Vector2 get_epa_penetration_vec(C_Collider *collider, C_Transform *transform) {
             }else {
                 edge_normal_out=(Vector2){-edge.y,edge.x};
             }
+
             edge_normal_out = Vector2Normalize(edge_normal_out);
 
             // calculate how far away the edge is from the origin
             float dist = Vector2DotProduct(edge_normal_out, simplex[i]);
+            
             if(dist < closest_dist || closest_ind==-1) {
                 closest_dist = dist;
                 closest_normal = edge_normal_out;
-                closest_ind = j;
+                closest_ind=j;
+
+                d_edge = edge;
             }
         }
-        Vector2 sup = support_function(transform->position, collider->collider_info, closest_normal);
+
+        //_debug->pen_vec=closest_normal;
+        _debug->start=simplex[closest_ind];
+        _debug->end=d_edge;
+
+        Vector2 sup = support_function((Vector2){0,0}, collider->collider_info,closest_normal);
         float dist = Vector2DotProduct(sup, closest_normal);
         penetration_vec = Vector2Scale(closest_normal, dist);
-        if(abs(dist-closest_dist)<=0.0000001) {
+
+        if(fabsf(dist-closest_dist)<=0.000001) {
             return penetration_vec;
         }else {
             vec_push(simplex, simplex[closest_ind]);
@@ -253,6 +274,7 @@ Vector2 get_epa_penetration_vec(C_Collider *collider, C_Transform *transform) {
         }
     }
     vec_free(simplex);
+    _debug->pen_vec=penetration_vec;
     return penetration_vec;
 }
 
@@ -320,11 +342,15 @@ void check_collisions_sys(ECS *ecs, entity_t entity_id) {
         // GJK Check
         if(check_gjk_collision(ecs, collider, collision)) {
             collider->is_colliding = true;
-            Vector2 pen_test = get_epa_penetration_vec(collider, transform);
+            //Vector2 pen_test = get_epa_penetration_vec(collider, transform);
 
             sds tag = ecs_get_tag(ecs, entity_id);
             if(tag) {
                 if(strcmp(tag, "Player")==0) {
+                    C_Debug *debug = ecs_get_component(ecs, entity_id, C_Debug);
+                    Vector2 pen_test = get_epa_penetration_vec(collider, transform, debug);
+                    //debug->pen_vec=pen_test;
+                    printf("%d %d\n", pen_test.x, pen_test.y);
                     transform->position = Vector2Subtract(transform->position, pen_test);
                 }
             }
@@ -376,13 +402,16 @@ int main(void) {
     ecs_register_component(ecs, C_Renderer);
     ecs_register_component(ecs, C_Collider);
     ecs_register_component(ecs, C_Camera);
+    ecs_register_component(ecs, C_Debug);
 
     // Player Definition
     entity_t player_id = new_entity_with_tag(ecs, "Player");
     C_Transform player_transform = new_transform((Vector2){20, 20}, (Vector2){60, 60}, 300.f);
     ecs_add_component(ecs, player_id, C_Transform, player_transform);
     ecs_add_component(ecs, player_id, C_Renderer, {WHITE, player_texture, true, RECT});
-    ecs_add_component(ecs, player_id, C_Collider, new_collider_circle(15.f, 15.f, 20.f, 0, 0));
+    //ecs_add_component(ecs, player_id, C_Collider, new_collider_circle(15.f, 15.f, 20.f, 0, 0));
+    ecs_add_component(ecs, player_id, C_Collider, new_collider_rect(0, 0, 30, 30, 0,0));
+    ecs_add_component(ecs, player_id, C_Debug, {(Vector2){0}});
     // End Of Player Definition
     
     entity_t static_e = new_entity(ecs);
@@ -437,6 +466,22 @@ int main(void) {
         ClearBackground(BLACK);
         BeginMode2D(c_camera->camera);
             ecs_call_system(ecs, ON_DRAW);
+
+            // DELETE  DEBUG
+            entity_t player_id = ecs_find_entity_with_tag(ecs, "Player");
+            C_Debug *player_debug = ecs_get_component(ecs, player_id, C_Debug);
+            C_Transform *player_transform= ecs_get_component(ecs, player_id, C_Transform);
+            C_Collider *player_collider= ecs_get_component(ecs, player_id, C_Collider);
+
+            DrawCircleV((Vector2){0,0}, 5.f, WHITE);
+            DrawLineV(player_collider->simplex[0], player_collider->simplex[1], PURPLE);
+            DrawLineV(player_collider->simplex[1], player_collider->simplex[2], PURPLE);
+            DrawLineV(player_collider->simplex[2], player_collider->simplex[0], PURPLE);
+
+            DrawLineV(player_debug->start, Vector2Add(player_debug->start,player_debug->end), GREEN);
+            Vector2 mid =Vector2Add(player_debug->start,Vector2Scale(player_debug->end,0.5f));
+            DrawLineV((Vector2){0,0}, player_debug->pen_vec, DARKGREEN);
+
         EndMode2D();
 
         // BeginShaderMode(space_curvature_shd);

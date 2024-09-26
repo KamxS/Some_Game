@@ -85,17 +85,14 @@ size_t sds_vector_find(sds *vec, sds value, size_t start);
 #define __ecs_get_id(entity_id) (entity_id & 0x0FFF)
 //#define __ecs_get_generation(entity_id) ((entity_id & 0xF000)>>24)
 
-// TODO: Not the biggest fan of this
 #define ecs_add_component(ecs, entity_id, component, ...) \
     do {\
         ComponentVec *cvec = __ecs_get_component_vec(ecs, component);\
         __link_entity_with_component(ecs, cvec, entity_id, vec_size(cvec->data));\
         component *vec = cvec->data;\
-        bool update = false;\
-        if(vec_size(vec) >= vec_capacity(vec)) update=true;\
         component n_component = __VA_ARGS__;\
         vec_push(vec, n_component);\
-        if(update) {cvec->data=vec;hashmap_set(ecs->components, &(struct component_kv){ #component, *cvec });}\
+        cvec->data=vec;\
     }while(0)
 
 #define ecs_get_component(ecs, entity_id, component)\
